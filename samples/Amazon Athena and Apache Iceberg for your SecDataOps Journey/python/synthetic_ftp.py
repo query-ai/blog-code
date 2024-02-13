@@ -2,6 +2,7 @@ from typing import NamedTuple, Tuple
 import json
 import random
 import datetime
+import pandas as pd
 
 class FtpRespCodeAndMessage(NamedTuple):
     """
@@ -158,9 +159,19 @@ ftpLogs = []
 while len(ftpLogs) < 15000:
     ftpLogs.append(generateSyntheticFtpLog())
 
+'''
 with open("./synthetic_ftp_logs.json", "w") as jsonfile:
     json.dump(
         ftpLogs,
         jsonfile,
         indent=4
     )
+'''
+
+df = pd.DataFrame(ftpLogs)
+
+df.to_parquet(
+    path="./synthetic_ftp_logs.parquet.zstd",
+    engine="auto",
+    compression="zstd"
+)
