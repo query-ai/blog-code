@@ -10,4 +10,8 @@ The subdirectorys are organized under [samples](./samples/) and the names of the
 
 * Amazon Athena and Apache Iceberg for your SecDataOps Journey
     - [Code](./samples/Amazon%20Athena%20and%20Apache%20Iceberg%20for%20your%20SecDataOps%20Journey/)
+    - [Blog Post](https://www.query.ai/resources/blogs/amazon-athena-and-apache-iceberg-for-your-secdataops-journey/)
+
+* Auto-partitioning your Security Data Lake with Apache PySpark and Amazon EMR Serverless
+    - [Code](./samples/Auto-partitioning your Security Data Lake with Apache PySpark and Amazon EMR Serverless)
     - Blog Post
