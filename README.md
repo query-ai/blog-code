@@ -9,9 +9,9 @@ This project gives you access to our code examples, notebooks, snippets, and mor
 The subdirectorys are organized under [samples](./samples/) and the names of the directories directly correspond to the name of the Blog.
 
 * Amazon Athena and Apache Iceberg for your SecDataOps Journey
-    - [Code](./samples/Amazon%20Athena%20and%20Apache%20Iceberg%20for%20your%20SecDataOps%20Journey/)
+    - [Code](./samples/athena_iceberg_secdataops/)
     - [Blog Post](https://www.query.ai/resources/blogs/amazon-athena-and-apache-iceberg-for-your-secdataops-journey/)
 
 * Auto-partitioning your Security Data Lake with Apache PySpark and Amazon EMR Serverless
-    - [Code](./samples/Auto-partitioning your Security Data Lake with Apache PySpark and Amazon EMR Serverless)
+    - [Code](./samples/pyspark_emr_serverless_autopartition/)
     - Blog Post
