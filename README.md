@@ -14,4 +14,8 @@ The subdirectorys are organized under [samples](./samples/) and the names of the
 
 * Auto-partitioning your Security Data Lake with Apache PySpark and Amazon EMR Serverless
     - [Code](./samples/pyspark_emr_serverless_autopartition/)
-    - Blog Post
+    - [Blog Post](https://www.query.ai/resources/blogs/auto-partitioning-your-security-data-lake-with-apache-pyspark-and-amazon-emr-serverless/)
+
+* Introductory SQL for SecOps: Exploratory Data Analysis with DuckDB
+    - [Code](./samples/duck_db_eda_part_1/)
+    - Blog Post: TODO!
