@@ -45,4 +45,4 @@ Resources:
       Tags: 
         - 
           Key: Name
-          Value: TgwSecDataOpsCollectorRole
+          Value: CentralTgwFlowLogCollectorRole
