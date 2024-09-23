@@ -1,0 +1,48 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >- 
+  Deploys the IAM Role needed to facilitate the automated inventory collection and configuration for Transit Gateway flow logs as part of the Searching AWS Transit Gateway Flow Logs with Amazon Athena blog by Query.ai
+Parameters:
+  CentralSecurityAccount:
+    Description: Account ID for your central Security Account, Logging Account, or SecDataOps Account
+    Type: String
+Resources:
+  #######
+  # IAM #
+  #######
+  TgwSecDataOpsCollectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CentralTgwFlowLogCollectorRole
+      Description: >-
+        Allows the Central SecDataOps or Logging Account the ability to describe Transit Gateways, Flow Logs, and Create Flow Logs - Managed by CloudFormation StackSets
+      Policies:
+        - PolicyName: CentralTgwFlowLogCollectorRolePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketPolicy
+                  - logs:CreateLogDelivery
+                  - ec2:CreateFlowLogs
+                  - ec2:DescribeFlowLogs
+                  - ec2:DescribeTransitGateways
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:CreateTags
+                Resource: 
+                  - !Sub 'arn:${AWS::Partition}:ec2:*:*:transit-gateway/*'
+                  - !Sub 'arn:${AWS::Partition}:ec2:*:*:vpc-flow-log/*'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub '${CentralSecurityAccount}'
+            Action:
+              - sts:AssumeRole
+      Tags: 
+        - 
+          Key: Name
+          Value: TgwSecDataOpsCollectorRole

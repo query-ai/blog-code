@@ -1,0 +1,332 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Deploys an automated inventory collection and Transit Gateway flow logs configuration solution as part of the Searching AWS Transit Gateway Flow Logs with Amazon Athena blog by Query.ai
+Parameters:
+  SolutionResourceName:
+    Type: String
+    Description: The naming convention used for resources deployed in this solution
+    Default: tgw_central_flowlog_configurator_
+  TgwSecDataOpsRoleName:
+    Type: String
+    Description: Name of the TGW Centralized Collection SecDataOps Role named deployed in your CloudFormation StackSets
+    Default: CentralTgwFlowLogCollectorRole
+  OrganizationPrincipalId:
+    Type: String
+    Description: Organization Principal ID
+  FlowLogFormat:
+    Type: String
+    Description: The Flow Log format - default value is the Version 6 Default as of 15 SEPT 2024
+    Default: ${version} ${resource-type} ${account-id} ${tgw-id} ${tgw-attachment-id} ${tgw-src-vpc-account-id} ${tgw-dst-vpc-account-id} ${tgw-src-vpc-id} ${tgw-dst-vpc-id} ${tgw-src-subnet-id} ${tgw-dst-subnet-id} ${tgw-src-eni} ${tgw-dst-eni} ${tgw-src-az-id} ${tgw-dst-az-id} ${tgw-pair-attachment-id} ${srcaddr} ${dstaddr} ${srcport} ${dstport} ${protocol} ${packets} ${bytes} ${start} ${end} ${log-status} ${type} ${packets-lost-no-route} ${packets-lost-blackhole} ${packets-lost-mtu-exceeded} ${packets-lost-ttl-expired} ${tcp-flags} ${region} ${flow-direction} ${pkt-src-aws-service} ${pkt-dst-aws-service}
+  EventScheduleExpression:
+    Type: String
+    Description: Schedule expression for the EventBridge Rule (default every 14 days)
+    Default: 'rate(14 days)'
+  GlueCrawlerScheduleExpression:
+    Type: String
+    Description: Schedule expression for the Glue Crawler (default every 24 hours)
+    Default: 'cron(0 0 * * ? *)'  # Runs daily at midnight UTC
+Resources:
+  TransitGatewayFlowLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'tgw-central-flowlog-collector-${AWS::AccountId}'
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  TransitGatewayFlowLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Sub 'tgw-central-flowlog-collector-${AWS::AccountId}'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSLogDeliveryWrite
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: 
+              - s3:PutObject
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::tgw-central-flowlog-collector-${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                aws:SourceOrgID: !Ref OrganizationPrincipalId
+                s3:x-amz-acl: bucket-owner-full-control
+          - Sid: AWSLogDeliveryAclCheck
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: 
+              - s3:GetBucketAcl
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::tgw-central-flowlog-collector-${AWS::AccountId}'
+            Condition:
+              StringEquals:
+                aws:SourceOrgID: !Ref OrganizationPrincipalId
+          - Sid: DenyUnencryptedTraffic
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:s3:::tgw-central-flowlog-collector-${AWS::AccountId}'
+              - !Sub 'arn:${AWS::Partition}:s3:::tgw-central-flowlog-collector-${AWS::AccountId}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  TransitGatewayCollectionDdbTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${SolutionResourceName}table'
+      AttributeDefinitions:
+        - AttributeName: TransitGatewayId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: TransitGatewayId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${SolutionResourceName}lambda_role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: !Sub '${SolutionResourceName}lambda_policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                Resource: !GetAtt TransitGatewayCollectionDdbTable.Arn
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource: !Sub 'arn:aws:iam::*:role/${TgwSecDataOpsRoleName}'
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeRegions
+                  - organizations:ListAccounts
+                Resource: '*'
+  TransitGatewayLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${SolutionResourceName}lambda'
+      Description: Finds Transit Gateways across the entire Organization in all active Regions and creates Version 6 Hive-like Parquet flow log configurations for them if not already created by this function - Managed by CloudFormation
+      Runtime: python3.12
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Handler: index.lambda_handler
+      Timeout: 900
+      MemorySize: 1024
+      Code:
+        ZipFile: |
+          import logging
+          from os import getenv
+          import boto3
+          from datetime import datetime, UTC
+          from botocore.exceptions import ClientError
+
+          logger = logging.getLogger()
+          logger.setLevel("INFO")
+
+          TGW_COLLECTOR_ROLE_NAME = getenv("TGW_COLLECTOR_ROLE_NAME")
+          TGW_DDB_TABLE_NAME = getenv("TGW_DDB_TABLE_NAME")
+          FLOW_LOG_COLLECTION_BUCKET_NAME = getenv("FLOW_LOG_COLLECTION_BUCKET_NAME")
+          TGW_FLOW_LOG_FORMAT = getenv("TGW_FLOW_LOG_FORMAT")
+
+          TABLE_RESOURCE = boto3.resource("dynamodb").Table(TGW_DDB_TABLE_NAME)
+          ORGS_CLIENT = boto3.client("organizations")
+          EC2_CLIENT = boto3.client("ec2")
+          STS_CLIENT = boto3.client("sts")
+
+          def lambda_handler(event, context):
+              enumerate_tgws()
+
+          def enumerate_tgws():
+              """Create regional sessions, find TGWs, check if they're indexed, create flow logs if not"""
+              for account in ORGS_CLIENT.list_accounts()["Accounts"]:
+                  if account["Status"] != "ACTIVE":
+                      continue
+                  awsAccountId = account["Id"]
+                  for region in EC2_CLIENT.describe_regions()["Regions"]:
+                      if region["OptInStatus"] == "not-opted-in":
+                          continue
+                      awsRegion = region["RegionName"]
+
+                      session = create_session(awsAccountId)
+                      ec2Session = session.client("ec2", region_name=awsRegion)
+                      
+                      if ec2Session.describe_transit_gateways()["TransitGateways"]:
+                          logger.info(f"Located Transit Gateways in AWS Account {awsAccountId} in Region {awsRegion}.")
+                          for tg in ec2Session.describe_transit_gateways()["TransitGateways"]:
+                              transitGatewayId = tg["TransitGatewayId"]
+                              if tgw_inventory_check(transitGatewayId) is False:
+                                  create_flow_logs(ec2Session, transitGatewayId)
+                                  tgw_inventory_write(transitGatewayId, awsRegion, awsAccountId)
+                              else:
+                                  continue
+
+          def create_session(awsAccountId: str) -> boto3.Session:
+              """Assumes a cross account role and returns a Boto3 session"""
+              xAccountRole = f"arn:aws:iam::{awsAccountId}:role/{TGW_COLLECTOR_ROLE_NAME}"
+
+              assumeRole = STS_CLIENT.assume_role(
+                  RoleArn=xAccountRole,
+                  RoleSessionName='TgwFlowLogCollector'
+              )
+
+              return boto3.Session(
+                  aws_access_key_id=assumeRole["Credentials"]["AccessKeyId"],
+                  aws_secret_access_key=assumeRole["Credentials"]["SecretAccessKey"],
+                  aws_session_token=assumeRole["Credentials"]["SessionToken"]
+              )
+
+          def tgw_inventory_check(transitGatewayId: str) -> bool:
+              """GET and Conditional PUT for TGW entries in DyanmoDB. If not present, configure the flow log"""
+              tgwCheck = True
+              
+              response = TABLE_RESOURCE.get_item(Key={'TransitGatewayId': transitGatewayId})
+              if "Item" not in response:
+                  tgwCheck = False
+
+              return tgwCheck
+
+          def tgw_inventory_write(transitGatewayId: str, awsRegion: str, awsAccountId: str):
+              """writes a new TGW records to DynamoDB"""
+
+              currentTime = str(datetime.now(UTC).isoformat())
+              try:
+                  TABLE_RESOURCE.put_item(
+                      Item={
+                          'TransitGatewayId': transitGatewayId,
+                          'Region': awsRegion,
+                          'Account': awsAccountId,
+                          'IndexedTime': currentTime
+                      }
+                  )
+                  logger.info(f"Added Transit Gateway {transitGatewayId} for AWS Account {awsAccountId} in Region {awsRegion} to DynamoDB.")
+              except ClientError as err:
+                  logger.error(f"Could not write Transit Gateway {transitGatewayId} to DynamoDB because \n: {err}")
+
+          def create_flow_logs(ec2Session, transitGatewayId: str):
+              """Creates TGW flow logs for non-indexed TGWs"""
+              try:
+                  r = ec2Session.create_flow_logs(
+                      ResourceIds=[transitGatewayId],
+                      ResourceType="TransitGateway",
+                      LogDestinationType="s3",
+                      LogDestination=f"arn:aws:s3:::{FLOW_LOG_COLLECTION_BUCKET_NAME}",
+                      LogFormat=TGW_FLOW_LOG_FORMAT,
+                      MaxAggregationInterval=60,
+                      TagSpecifications=[
+                          {
+                              'ResourceType': "vpc-flow-log",
+                              "Tags": [
+                                  {
+                                      "Key": "Name",
+                                      "Value": "tgw_centralized_hive_parquet"
+                                  }
+                              ]
+                          }
+                      ],
+                      DestinationOptions={
+                          "FileFormat": "parquet",
+                          "HiveCompatiblePartitions": True,
+                          "PerHourPartition": True
+                      }
+                  )
+                  if r["Unsuccessful"]:
+                      err = r["Unsuccessful"]
+                      logger.error(f"Could not create flow logs for Transit Gateway {transitGatewayId} because \n: {err}")
+                  else:
+                      logger.info(f"Created flow logs for Transit Gateway {transitGatewayId}. {r}")
+              except ClientError as err:
+                  logger.error(f"Could not create flow logs for Transit Gateway {transitGatewayId} because \n: {err}")
+
+          # End of code
+      Environment:
+        Variables:
+          TGW_COLLECTOR_ROLE_NAME: !Ref TgwSecDataOpsRoleName
+          TGW_DDB_TABLE_NAME: !Sub '${SolutionResourceName}table'
+          FLOW_LOG_COLLECTION_BUCKET_NAME: !Ref TransitGatewayFlowLogsBucket
+          TGW_FLOW_LOG_FORMAT: !Ref FlowLogFormat
+  InvokeLambdaEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${SolutionResourceName}lambda_invoker'
+      Description: 'Invokes the Lambda function based on the provided schedule'
+      ScheduleExpression: !Ref EventScheduleExpression
+      State: ENABLED
+      Targets:
+        - Id: 'Target0'
+          Arn: !GetAtt TransitGatewayLambdaFunction.Arn
+  EventBridgeInvokeRole:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Sub '${SolutionResourceName}lambda'
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt InvokeLambdaEventRule.Arn
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref 'AWS::AccountId'
+      DatabaseInput:
+        Name: !Sub '${SolutionResourceName}db'
+        Description: Stores TGW flow log tables - Managed by CloudFormation
+  GlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: 'GlueCrawlerRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: 'GlueCrawlerPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt TransitGatewayFlowLogsBucket.Arn
+                  - !Sub '${TransitGatewayFlowLogsBucket.Arn}/*'
+  GlueCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub '${SolutionResourceName}crawler'
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: !Sub '${SolutionResourceName}db'
+      Targets:
+        S3Targets:
+          - Path: !Sub 's3://${TransitGatewayFlowLogsBucket}'
+      Schedule: 
+        ScheduleExpression: !Ref GlueCrawlerScheduleExpression
+      Configuration: '{"Version":1.0,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"}}}'
