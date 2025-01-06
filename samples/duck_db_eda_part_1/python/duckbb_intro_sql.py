@@ -58,7 +58,7 @@ duckdb.sql(
 duckdb.sql(
     f"""
     SELECT DISTINCT
-        COUNT(device.ip) AS total_device_ips
+        COUNT(device.ip) AS total_device_ips,
         COUNT(file.name) AS total_file_names
     FROM read_json('{LOCAL_JSON}')
     """
