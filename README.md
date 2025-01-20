@@ -6,7 +6,7 @@ This project gives you access to our code examples, notebooks, snippets, and mor
 
 ## Get Access
 
-The subdirectorys are organized under [samples](./samples/) and the names of the directories directly correspond to the name of the Blog.
+The subdirectories are organized under [samples](./samples/) and the names of the directories directly correspond to the name of the Blog.
 
 * Amazon Athena and Apache Iceberg for your SecDataOps Journey
     - [Code](./samples/athena_iceberg_secdataops/)
@@ -18,4 +18,11 @@ The subdirectorys are organized under [samples](./samples/) and the names of the
 
 * Introductory SQL for SecOps: Exploratory Data Analysis with DuckDB
     - [Code](./samples/duck_db_eda_part_1/)
-    - Blog Post: TODO!
+    - [Blog Post](https://www.query.ai/resources/blogs/introductory-sql-for-secops/)
+
+* Searching AWS Transit Gateway Flow Logs with Amazon Athena
+    - [Code](./samples/tgw_flow_logs/)
+    - [Blog Post](https://www.query.ai/resources/blogs/searching-aws-transit-gateway-flow-logs-with-amazon-athena/)
+
+* Definitive guide to mapping AWS ALB access logs to the Open Cybersecurity Schema Framework (OCSF) format
+    - [Code](./samples/alb_ocsf_mapping/)
