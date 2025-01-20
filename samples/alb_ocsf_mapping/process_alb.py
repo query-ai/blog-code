@@ -15,8 +15,8 @@ GROK = Grok(
     '%{DATA:type}\s+%{TIMESTAMP_ISO8601:time}\s+%{DATA:elb}\s+%{DATA:client}\s+%{DATA:target}\s+%{BASE10NUM:request_processing_time}\s+%{DATA:target_processing_time}\s+%{BASE10NUM:response_processing_time}\s+%{BASE10NUM:elb_status_code}\s+%{DATA:target_status_code}\s+%{BASE10NUM:received_bytes}\s+%{BASE10NUM:sent_bytes}\s+\"%{DATA:request}\"\s+\"%{DATA:user_agent}\"\s+%{DATA:ssl_cipher}\s+%{DATA:ssl_protocol}\s+%{DATA:target_group_arn}\s+\"%{DATA:trace_id}\"\s+\"%{DATA:domain_name}\"\s+\"%{DATA:chosen_cert_arn}\"\s+%{DATA:matched_rule_priority}\s+%{TIMESTAMP_ISO8601:request_creation_time}\s+\"%{DATA:actions_executed}\"\s+\"%{DATA:redirect_url}\"\s+\"%{DATA:error_reason}\"\s+\"%{DATA:target_list}\"\s+\"%{DATA:target_status_code_list}\"\s+\"%{DATA:classification}\"\s+\"%{DATA:classification_reason}\"'
 )
 
-BUCKET_NAME = "alb-access-logs-query-se-sandbox"
-PATH_NAME = "AWSLogs/125343585094/elasticloadbalancing/us-east-2/2024/11/17"
+BUCKET_NAME = ""
+PATH_NAME = ""
 
 def openLogFile(bucket: str, prefix: str):
     """
