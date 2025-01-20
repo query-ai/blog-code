@@ -1,0 +1,5 @@
+boto3>=1.35.74
+duckdb>=1.0.0
+pandas>=2.2.3
+pyarrow>=16.1.0
+pygrok>=1.0.0
