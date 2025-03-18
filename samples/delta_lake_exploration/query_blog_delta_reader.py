@@ -74,6 +74,7 @@ duckdb.sql(f"""
         SUM(total_bytes) AS total_transfer
     FROM delta_scan('{S3_DELTA_PATH}')
     WHERE action NOT IN ('block','drop')
+        AND direction = 'outbound'
     GROUP BY client_ip
     ORDER BY total_transfer DESC
     LIMIT 10
