@@ -1,102 +1,98 @@
-import random
+import numpy as np
+import polars as pl
 import ipaddress
 import datetime
 from hashlib import sha256
-import pandas as pd
 from deltalake import write_deltalake
 
 S3_BUCKET_NAME = ""
-S3_DELTA_PATH = f"s3://{S3_BUCKET_NAME}/"
+S3_DELTA_PATH = f"s3://{S3_BUCKET_NAME}/deltalake/source=query_blog_lakehouse"
 S3_BUCKET_LOCATION = ""
-TOTAL_RECORDS = 100_000
+TOTAL_RECORDS = 250_000
+
+INTERNAL_CIDRS = ["10.100.0.0/16", "192.168.1.0/16"]
+CLIENT_CIDRS = ["47.16.64.0/20", "12.88.80.0/20", "94.126.208.0/21"]
+
+INTERNAL_PORTS = np.array([80, 443, 22, 3389, 445, 21, 120, 1521], dtype=np.int16)
+CLIENT_PORTS = (3200, 62000)
+
+DIRECTIONS = np.array(["in", "out"], dtype=object)
+ACTIONS = np.array(["allow", "drop", "block", "inspect"], dtype=object)
+
+TOTAL_BYTES_RANGE = (32, 69420)
+TOTAL_PACKETS_RANGE = (8, 4209)
 
 def randomIpFromCidr(cidr: str) -> str:
-    network = ipaddress.IPv4Network(cidr, strict=False)
-    return str(random.choice(list(network.hosts())))
+    """Generates an IP based on a CIDR/Subnet Mask"""
+    network = ipaddress.ip_network(cidr, strict=False)
+    return str(network.network_address + np.random.randint(1, network.num_addresses - 1))
 
-def generatePrivateIp() -> str:
-    return random.choice([
-        randomIpFromCidr("10.100.0.0/16"),randomIpFromCidr("192.168.1.0/16")
-    ])
+def generatePrivateIps(n: int) -> np.ndarray:
+    """Generate all internal/private IPs"""
+    return np.array([randomIpFromCidr(np.random.choice(INTERNAL_CIDRS)) for _ in range(n)])
 
-def generatePublicIp() -> str:
-    return random.choice([
-        randomIpFromCidr("47.16.64.0/20"),randomIpFromCidr("12.88.80.0/20"),randomIpFromCidr("94.126.208.0/21")
-    ])
+def generatePublicIps(n: int) -> np.ndarray:
+    """Generate all client/public IPs"""
+    return np.array([randomIpFromCidr(np.random.choice(CLIENT_CIDRS)) for _ in range(n)])
 
-def generateSyntheticTimestampNtz() -> str:
-    """
-    Generate a random Timestamp(3) between now and 12 Hours From Now
-    """
-
+def generateSyntheticTimestamps(n: int) -> np.ndarray:
+    """Generates timestamps between now and 5 days ago"""
     now = datetime.datetime.now()
-    tweleveHoursFromNowLol = now + datetime.timedelta(hours=12)
+    past = now - datetime.timedelta(days=5)
+    timestamps = past.timestamp() + np.random.randint(0, int((now - past).total_seconds()), size=n)
+    return np.array([datetime.datetime.fromtimestamp(ts).isoformat() for ts in timestamps])
 
-    randTs = random.randint(
-        int(now.timestamp()),
-        int(tweleveHoursFromNowLol.timestamp())
+def generateEventIds(privateIps: np.ndarray, publicIps: np.ndarray, timestamps: np.ndarray) -> np.ndarray:
+    """Generates an event ID using a hash of the timestamp, public/client, and private/internal IPs"""
+    return np.array([
+        sha256(f"{pIp}{cIp}{ts}".encode()).hexdigest()
+        for pIp, cIp, ts in zip(privateIps, publicIps, timestamps)
+    ])
+
+def generateSyntheticNetworkLogs(totalRecords: int) -> pl.DataFrame:
+    """Assemble the synthetic logs"""
+    privateIps = generatePrivateIps(totalRecords)
+    publicIps = generatePublicIps(totalRecords)
+    timestamps = generateSyntheticTimestamps(totalRecords)
+    eventIds = generateEventIds(privateIps, publicIps, timestamps)
+
+    df = pl.DataFrame({
+        "event_time": timestamps,
+        "event_id": eventIds,
+        "internal_ip": privateIps,
+        "internal_port": np.random.choice(INTERNAL_PORTS, size=totalRecords),
+        "client_ip": publicIps,
+        "client_port": np.random.randint(*CLIENT_PORTS, size=totalRecords),
+        "direction": np.random.choice(DIRECTIONS, size=totalRecords),
+        "action": np.random.choice(ACTIONS, size=totalRecords),
+        "total_bytes": np.random.randint(*TOTAL_BYTES_RANGE, size=totalRecords),
+        "total_packets": np.random.randint(*TOTAL_PACKETS_RANGE, size=totalRecords),
+    })
+
+    df = df.with_columns(
+        pl.col("event_time").str.strptime(pl.Datetime, "%Y-%m-%dT%H:%M:%S.%f", strict=False).alias("event_time")
     )
 
-    # Generated data will have OO:OO:OO.00000, make it spicier
-    randDate = datetime.datetime.fromtimestamp(randTs).replace(
-        hour=random.randint(0, 23),
-        minute=random.randint(0, 59),
-        second=random.randint(0, 59),
-        microsecond=random.randint(0, 999))
+    df = df.with_columns(
+        pl.col("event_time").dt.year().cast(pl.Int32).alias("year"),
+        pl.col("event_time").dt.month().cast(pl.Int32).alias("month"),
+        pl.col("event_time").dt.day().cast(pl.Int32).alias("day")
+    )
     
-    randDateTimestampNtz = str(randDate.strftime("%Y-%m-%d %H:%M:%S.%f"))
-
-    # TIMESTAMP(3) / TIMESTAMP_NTZ
-    return randDateTimestampNtz
-
-def generateHexdigest(privateIp: str, publicIp: str, timestamp: str) -> str:
-    combinedString = f"{privateIp}{publicIp}{timestamp}"
-    return sha256(combinedString.encode()).hexdigest()
-
-def generateSyntheticNetworkLogs(totalRecords: int) -> list[dict]:
-    """Generates random network logs"""
-    syntheticLogs: list[dict] = []
-
-    while len(syntheticLogs) != totalRecords:
-        privateIp = generatePrivateIp()
-        publicIp = generatePublicIp()
-        eventTime = generateSyntheticTimestampNtz()
-
-        eventId = generateHexdigest(privateIp,publicIp,eventTime)
-
-        log = {
-            "event_time": eventTime,
-            "event_id": eventId,
-            "internal_ip": privateIp,
-            "internal_port": random.choice([80,443,22,3389,445,21,120,1521]),
-            "client_ip": publicIp,
-            "client_port": random.randint(3200, 62000),
-            "direction": random.choice(["in","out"]),
-            "action": random.choice(["allow","drop","block","inspect"]),
-            "total_bytes": random.randint(32,69420),
-            "total_packets": random.randint(8,4209)
-        }
-
-        syntheticLogs.append(log)
-
-    return syntheticLogs
+    return df
 
 def writeSyntheticNetworkLogsToDelta(totalRecords: int):
-    """Writes the DataFrame to a Delta Table on S3 with partitions."""
-    df = pd.DataFrame(generateSyntheticNetworkLogs(totalRecords))
+    """Sends synth network logs to Delta Lake in S3 using year/month/day partitions"""
+    df = generateSyntheticNetworkLogs(totalRecords)
 
-    df["event_time"] = pd.to_datetime(df["event_time"])
-    df["year"] = df["event_time"].dt.year
-    df["month"] = df["event_time"].dt.month
-    df["day"] = df["event_time"].dt.day
-    df["hour"] = df["event_time"].dt.hour
-
+    print(df.head(n=5))
+    
     write_deltalake(
-        S3_DELTA_PATH, 
-        df, 
+        S3_DELTA_PATH,
+        df,
         mode="append",
-        partition_by=["year","month","day","hour"],
-        storage_options={"AWS_REGION": S3_BUCKET_LOCATION}
+        partition_by=["year", "month", "day"],
+        storage_options={"AWS_REGION": S3_BUCKET_LOCATION},
     )
     print(f"Data written to Delta at {S3_DELTA_PATH}")
 
