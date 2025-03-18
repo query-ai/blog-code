@@ -5,8 +5,8 @@ from hashlib import sha256
 import pandas as pd
 from deltalake import write_deltalake
 
-SS_BUCKET_NAME = ""
-S3_DELTA_PATH = f"s3://{SS_BUCKET_NAME}/"
+S3_BUCKET_NAME = ""
+S3_DELTA_PATH = f"s3://{S3_BUCKET_NAME}/"
 S3_BUCKET_LOCATION = ""
 
 def randomIpFromCidr(cidr: str) -> str:
