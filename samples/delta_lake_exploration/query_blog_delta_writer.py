@@ -92,7 +92,7 @@ def writeSyntheticNetworkLogsToDelta(totalRecords: int):
         df,
         mode="append",
         partition_by=["year", "month", "day"],
-        storage_options={"AWS_REGION": S3_BUCKET_LOCATION},
+        storage_options={"AWS_REGION": S3_BUCKET_LOCATION}
     )
     print(f"Data written to Delta at {S3_DELTA_PATH}")
 
