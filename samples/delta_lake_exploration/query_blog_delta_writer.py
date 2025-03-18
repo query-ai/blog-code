@@ -8,6 +8,7 @@ from deltalake import write_deltalake
 S3_BUCKET_NAME = ""
 S3_DELTA_PATH = f"s3://{S3_BUCKET_NAME}/"
 S3_BUCKET_LOCATION = ""
+TOTAL_RECORDS = 100_000
 
 def randomIpFromCidr(cidr: str) -> str:
     network = ipaddress.IPv4Network(cidr, strict=False)
@@ -99,4 +100,4 @@ def writeSyntheticNetworkLogsToDelta(totalRecords: int):
     )
     print(f"Data written to Delta at {S3_DELTA_PATH}")
 
-writeSyntheticNetworkLogsToDelta(totalRecords=100)
+writeSyntheticNetworkLogsToDelta(TOTAL_RECORDS)
