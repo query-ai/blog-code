@@ -26,3 +26,7 @@ The subdirectories are organized under [samples](./samples/) and the names of th
 
 * Definitive guide to mapping AWS ALB access logs to the Open Cybersecurity Schema Framework (OCSF) format
     - [Code](./samples/alb_ocsf_mapping/)
+    - [Blog Post](https://www.query.ai/resources/blogs/mapping-amazon-application-load-balancer-access-logs-to-the-open-cybersecurity-schema-framework-ocsf/)
+
+* Exploring Delta Lake for Security Operations
+    - [Code](./samples/delta_lake_exploration/)
