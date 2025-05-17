@@ -1,0 +1,403 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS-based Carbon Black Event ETL Stack with Glue integration
+Parameters:
+  Prefix:
+    Type: String
+    Default: carbon-black-event-etl-
+    Description: Prefix naming convention for all resource and name tags
+  ProcessorEcrImageUri:
+    Type: String
+    Description: Full ECR image URI for the processor task including tag (e.g., 123.dkr.ecr.us-east-1.amazonaws.com/my-repo:latest)
+  CompactorEcrImageUri:
+    Type: String
+    Description: Full ECR image URI for the compactor task including tag (e.g., 123.dkr.ecr.us-east-1.amazonaws.com/my-repo:latest)
+  BucketName:
+    Type: String
+    Description: Data lake bucket name that contains Carbon Black events
+  CarbonBlackOrgKey:
+    Type: String
+    Description: Your Carbon Black Org Key
+  InputPrefix:
+    Type: String
+    Default: source=cb_endpoint_events
+    Description: The top-level prefix for your Carbon Black events written to S3
+  DestPrefix:
+    Type: String
+    Default: source=carbon_black_events_processed
+    Description: S3 prefix to write processed CB events into
+  MaxFilesBatch:
+    Type: Number
+    Default: 500
+    Description: Maximum amount of S3 objects (files) to process at a time
+  MaxRecordsBatch:
+    Type: Number
+    Default: 100000
+    Description: Maximum amount of Carbon Black events (records) to process at a time
+  ProcessorTimeWindowMinutes:
+    Type: Number
+    Default: 30
+    Description: The amount of time in minutes for the Processor task to search for new raw Carbon Black Events
+  CompactorTimeWindowDays:
+    Type: Number
+    Default: 30
+    Description: The amount of days for the Compactor task to search for processed Carbon Black Events
+  EcsCpu:
+    Type: Number
+    Default: 4096
+    Description: Total CPU to dedicate to ECS service
+  EcsMemory:
+    Type: Number
+    Default: 10240
+    Description: Total memory (RAM) to dedicate to ECS service
+  GlueCrawlerScheduleExpression:
+    Type: String
+    Description: The cadence to run the Glue crawler - defaults to hourly
+    Default: "cron(0 * * * ? *)"  # hourly
+    AllowedValues:
+      - "cron(0 * * * ? *)"       # hourly
+      - "cron(0/15 * * * ? *)"    # every 15 minutes
+      - "cron(0/30 * * * ? *)"    # every 30 minutes
+      - "cron(0 0/2 * * ? *)"     # every 2 hours
+      - "cron(0 0,12 * * ? *)"    # every 12 hours (midnight and noon UTC)
+      - "cron(0 0 * * ? *)"       # every 24 hours (midnight UTC)
+  EventBridgeScheduleExpression:
+    Type: String
+    Description: The cadence to run the EventBridge Scheduler Rule for the ECS task - defaults to every 15 minutes
+    Default: "cron(0/15 * * * ? *)" 
+    AllowedValues:
+      - "cron(0 * * * ? *)"       # hourly
+      - "cron(0/15 * * * ? *)"    # every 15 minutes
+      - "cron(0/30 * * * ? *)"    # every 30 minutes
+      - "cron(0 0/2 * * ? *)"     # every 2 hours
+      - "cron(0 0,12 * * ? *)"    # every 12 hours (midnight and noon UTC)
+      - "cron(0 0 * * ? *)"       # every 24 hours (midnight UTC)
+  VpcSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of subnet IDs for scheduled ECS task networking - pick two Subnets with a path to the internet
+  SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for the scheduled ECS task - requires allow all on the SG, VPC, or at least 443 to 0.0.0.0
+
+Resources:
+  #######
+  # ECS #
+  #######
+  
+  # Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${Prefix}cluster"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}cluster"
+  
+  # Processor Task Definition
+  ProcessorEcsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      Cpu: !Ref EcsCpu
+      Memory: !Ref EcsMemory
+      NetworkMode: awsvpc
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: carbon-black-processor
+          Image: !Ref ProcessorEcrImageUri
+          Essential: true
+          Environment:
+            - Name: ORG_KEY
+              Value: !Ref CarbonBlackOrgKey
+            - Name: CB_EVENTS_S3_BUCKET_NAME
+              Value: !Ref BucketName
+            - Name: INPUT_PREFIX
+              Value: !Ref InputPrefix
+            - Name: OUTPUT_PREFIX
+              Value: !Ref DestPrefix
+            - Name: FILES_PER_BATCH
+              Value: !Ref MaxFilesBatch
+            - Name: MAX_RECORDS
+              Value: !Ref MaxRecordsBatch
+            - Name: TIME_WINDOW_MINUTES
+              Value: !Ref ProcessorTimeWindowMinutes
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub "/ecs/${Prefix}proccesor-logs"
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+  
+  # Compactor Task Definition
+  CompactorEcsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      Cpu: !Ref EcsCpu
+      Memory: !Ref EcsMemory
+      NetworkMode: awsvpc
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: carbon-black-compactor
+          Image: !Ref CompactorEcrImageUri
+          Essential: true
+          Environment:
+            - Name: CB_EVENTS_S3_BUCKET_NAME
+              Value: !Ref BucketName
+            - Name: OUTPUT_PREFIX
+              Value: !Ref DestPrefix
+            - Name: TIME_WINDOW_DAYS
+              Value: !Ref CompactorTimeWindowDays
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub "/ecs/${Prefix}compactor-logs"
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+  
+  #######
+  # IAM #
+  #######
+  
+  # ECS Execution Role
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}ecs-exec-role"
+      Description: Gives ECS default execution role permissions to ECR and CloudWatch Logs - Managed by CloudFormation
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}execution-role"
+  
+  # ECS Task Role
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}ecs-task-role"
+      Description: Gives ECS permissions to access the Carbon Black events S3 bucket - Managed by CloudFormation
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: TaskPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${BucketName}/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${BucketName}"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}task-role"
+  
+  # Glue Crawler Service Role
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}crawler-role"
+      Description: Gives Glue Crawler the permissions to scan S3 for processed Carbon Black Events and typical CloudWatch, EC2 (ENI), and Glue permissions - managed by CloudFormation
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GlueCrawlerPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${BucketName}"
+                  - !Sub "arn:aws:s3:::${BucketName}/${DestPrefix}*"
+              - Effect: Allow
+                Action:
+                  - logs:PutLogEvents
+                Resource: "*"
+  
+  # EventBridge Schedule Service Role
+  EventBridgeExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}schedule-role"
+      Description: Gives EventBridge Scheduler the permissions to run your ECS task and pass role to the Task and Execution policies - managed by CloudFormation
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowScopedEcsRunTask
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RunTask
+                Resource: !Ref ProcessorEcsTaskDefinition
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt ExecutionRole.Arn
+                  - !GetAtt TaskRole.Arn
+              - Effect: Allow
+                Action:
+                  - ecs:TagResource
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    ecs:CreateAction:
+                      - RunTask
+
+  ##############
+  # CLOUDWATCH #
+  ##############
+
+  # ECS Processor Log Group
+  ECSProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${Prefix}proccesor-logs"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "/ecs/${Prefix}proccesor-logs"
+    
+  # ECS Compactor Log Group
+  ECSCompactorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${Prefix}compactor-logs"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "/ecs/${Prefix}compactor-logs"
+
+  ###############
+  # EVENTBRIDGE #
+  ###############
+
+  # ECS Processor Scheduler
+  ProcessorEventBridgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${Prefix}-carbon-black-processor-rule"
+      ScheduleExpression: !Ref EventBridgeScheduleExpression
+      State: ENABLED
+      Targets:
+        - Id: CarbonBlackProcessorTask
+          Arn: !GetAtt ECSCluster.Arn
+          RoleArn: !GetAtt EventBridgeExecutionRole.Arn
+          EcsParameters:
+            TaskDefinitionArn: !Ref ProcessorEcsTaskDefinition
+            LaunchType: FARGATE
+            PlatformVersion: "LATEST"
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: DISABLED
+                SecurityGroups:
+                  - !Ref SecurityGroupId
+                Subnets: !Ref VpcSubnets
+
+  # ECS Compactor Scheduler
+  CompactorEventBridgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${Prefix}-carbon-black-compactor-rule"
+      ScheduleExpression: "cron(0 0 * * ? *)" # every 24 hours (midnight UTC)
+      State: ENABLED
+      Targets:
+        - Id: CarbonBlackCompactorTask
+          Arn: !GetAtt ECSCluster.Arn
+          RoleArn: !GetAtt EventBridgeExecutionRole.Arn
+          EcsParameters:
+            TaskDefinitionArn: !Ref CompactorEcsTaskDefinition
+            LaunchType: FARGATE
+            PlatformVersion: "LATEST"
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: DISABLED
+                SecurityGroups:
+                  - !Ref SecurityGroupId
+                Subnets: !Ref VpcSubnets
+
+  ########
+  # GLUE #
+  ########
+
+  # Database
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: carbon_black_processed
+
+  # Crawler
+  GlueCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "${Prefix}crawler"
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${BucketName}/${DestPrefix}"
+      Schedule:
+        ScheduleExpression: !Ref GlueCrawlerScheduleExpression
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: DEPRECATE_IN_DATABASE
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_EVERYTHING
+      Tags:
+        Name: !Sub "${Prefix}glue-crawler"
+
+Outputs:
+  ClusterName:
+    Value: !Ref ECSCluster
+  TaskDefinitionArn:
+    Value: !Ref ProcessorEcsTaskDefinition
+  GlueCrawlerName:
+    Value: !Ref GlueCrawler
+  GlueDatabaseName:
+    Value: !Ref GlueDatabase
