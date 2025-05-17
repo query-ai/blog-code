@@ -272,7 +272,9 @@ Resources:
               - Effect: Allow
                 Action:
                   - ecs:RunTask
-                Resource: !Ref ProcessorEcsTaskDefinition
+                Resource:
+                  - !Ref ProcessorEcsTaskDefinition
+                  - !Ref CompactorEcsTaskDefinition
               - Effect: Allow
                 Action:
                   - iam:PassRole
